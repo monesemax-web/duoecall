@@ -78,7 +78,12 @@ input { font-family: inherit; }
   flex: 1; position: relative; display: grid; gap: 6px; padding: 6px; background: #000;
   grid-template-rows: 1fr 1fr;
 }
-@media (min-width: 760px) { .stage { grid-template-rows: none; grid-template-columns: 1fr 1fr; } }
+/* Side-by-side only on genuinely wide screens (laptops/desktops).
+   Phones — even rotated to landscape — keep the tiles stacked and full-width,
+   using orientation + a high min-width so a phone never triggers the desktop split. */
+@media (min-width: 1000px) and (orientation: landscape) {
+  .stage { grid-template-rows: none; grid-template-columns: 1fr 1fr; }
+}
 
 .tile {
   position: relative; background: #0b0e12; border-radius: 14px; overflow: hidden;
