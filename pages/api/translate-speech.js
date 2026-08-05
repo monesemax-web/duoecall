@@ -49,7 +49,13 @@ export default async function handler(req, res) {
     if (!sttRes.ok) {
       const detail = await sttRes.text();
       console.error("STT error:", detail);
-      return res.status(502).json({ error: "Transcription failed" });
+      // Surface the real reason so we can diagnose (temporary, for debugging).
+      return res.status(502).json({
+        error: "Transcription failed",
+        stage: "speech-to-text",
+        status: sttRes.status,
+        detail: detail.slice(0, 500),
+      });
     }
 
     const sttData = await sttRes.json();
@@ -101,6 +107,6 @@ export default async function handler(req, res) {
     return res.status(200).json({ original, translated });
   } catch (err) {
     console.error("translate-speech error:", err);
-    return res.status(500).json({ error: "Translation error" });
+    return res.status(500).json({ error: "Translation error", detail: String(err && err.message || err).slice(0, 500) });
   }
 }
