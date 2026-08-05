@@ -284,3 +284,17 @@ input { font-family: inherit; }
   margin-top: 4px;
   padding: 0 8px;
 }
+
+/* Turn-state indicator */
+.turn {
+  text-align: center;
+  font-size: 15px;
+  font-weight: 700;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  transition: background 0.2s ease;
+}
+.turn-ready { background: #14532d; color: #a7f3d0; }
+.turn-listening { background: #1e3a5f; color: #bfdbfe; }
+.turn-translating { background: #4a3410; color: #fde68a; }
+.turn-incoming { background: #3a1e4a; color: #e9d5ff; }
