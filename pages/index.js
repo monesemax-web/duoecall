@@ -22,6 +22,7 @@ export default function Home() {
   const [joinUrl, setJoinUrl] = useState("");
   const [error, setError] = useState("");
   const [speak, setSpeak] = useState("en");
+  const [voice, setVoice] = useState("male");
 
   async function startCall() {
     setError("");
@@ -36,7 +37,7 @@ export default function Home() {
       }
       // Room name is the last path segment of the Daily URL.
       const name = j.name || (j.url || "").split("/").pop();
-      router.push(`/call/${encodeURIComponent(name)}?speak=${speak}`);
+      router.push(`/call/${encodeURIComponent(name)}?speak=${speak}&voice=${voice}`);
     } catch (e) {
       setError("Network error starting the call.");
       setCreating(false);
@@ -49,7 +50,7 @@ export default function Home() {
     if (!val) return;
     // Accept either a full Daily URL or just a room name.
     const name = val.includes("/") ? val.split("/").pop().split("?")[0] : val;
-    router.push(`/call/${encodeURIComponent(name)}?speak=${speak}`);
+    router.push(`/call/${encodeURIComponent(name)}?speak=${speak}&voice=${voice}`);
   }
 
   return (
@@ -79,6 +80,13 @@ export default function Home() {
             ))}
           </select>
         </div>
+        <div className="lang-row">
+          <label>My voice</label>
+          <select value={voice} onChange={(e) => setVoice(e.target.value)}>
+            <option value="male">Male</option>
+            <option value="female">Female</option>
+          </select>
+        </div>
         <div className="lang-note">
           The other person picks their own language. Everyone hears the other in
           their language automatically.
@@ -106,8 +114,9 @@ export default function Home() {
       )}
 
       <div className="hint">
-        Stage 1: this is the plain video call. Translation comes next. Test it by
-        opening the call link on a second phone.
+        Pick your language and voice, start a call, and share the link. The other
+        person picks theirs — then just talk, and each of you hears the other in
+        your own language.
       </div>
     </div>
   );
