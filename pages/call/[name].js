@@ -361,7 +361,8 @@ export default function CallPage() {
 
         const SPEAK_THRESH = 30;   // avg volume to count as sound
         const LOUD_THRESH = 44;    // clearly speech
-        const SILENCE_MS = 550;    // pause that ends a turn (shortened for speed)
+        const SILENCE_MS = 1400;   // pause that ends a turn — long enough to
+                                   // ride through natural mid-sentence pauses
         const MIN_MS = 400;        // must speak this long
         const MIN_LOUD = 6;        // need this many loud frames
 
