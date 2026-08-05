@@ -64,6 +64,25 @@ export default function CallPage() {
     if (speak && !myLang) setMyLang(speak);
   }, [router.isReady, speak, myLang]);
 
+  // Backstop: unlock mobile speech on the first tap anywhere in the call,
+  // in case the picker's Join tap didn't (e.g. the starter who skips it).
+  useEffect(() => {
+    if (!myLang) return;
+    let done = false;
+    const unlock = () => {
+      if (done) return;
+      done = true;
+      try {
+        const u = new SpeechSynthesisUtterance(" ");
+        u.volume = 0;
+        window.speechSynthesis.speak(u);
+      } catch (e) {}
+      window.removeEventListener("pointerdown", unlock);
+    };
+    window.addEventListener("pointerdown", unlock);
+    return () => window.removeEventListener("pointerdown", unlock);
+  }, [myLang]);
+
   // ---- Send helpers (safe: only after join) ----
   function safeSend(obj) {
     if (!joinedRef.current) return;
@@ -76,18 +95,48 @@ export default function CallPage() {
   }
 
   // ---- Text to speech ----
+  // Mobile browsers block speech until unlocked by a user gesture. We call
+  // unlockSpeech() from the Join tap so speaking works on phones afterward.
+  function unlockSpeech() {
+    try {
+      if (!("speechSynthesis" in window)) return;
+      const u = new SpeechSynthesisUtterance(" ");
+      u.volume = 0; // silent priming utterance
+      window.speechSynthesis.speak(u);
+      // Trigger voice list load (some browsers populate lazily).
+      window.speechSynthesis.getVoices();
+    } catch (e) {}
+  }
+
   function speak_(text, langCode) {
     try {
       if (!("speechSynthesis" in window)) return;
-      const u = new SpeechSynthesisUtterance(text);
-      u.lang = TTS_LANG[langCode] || "en-US";
-      u.rate = 1.0;
-      const voices = window.speechSynthesis.getVoices();
-      const base = (TTS_LANG[langCode] || "en").slice(0, 2);
-      const match = voices.find((v) => v.lang && v.lang.toLowerCase().startsWith(base));
-      if (match) u.voice = match;
-      window.speechSynthesis.cancel();
-      window.speechSynthesis.speak(u);
+      const synth = window.speechSynthesis;
+      const doSpeak = () => {
+        const u = new SpeechSynthesisUtterance(text);
+        u.lang = TTS_LANG[langCode] || "en-US";
+        u.rate = 1.0;
+        u.volume = 1.0;
+        const voices = synth.getVoices();
+        const base = (TTS_LANG[langCode] || "en").slice(0, 2);
+        const match = voices.find(
+          (v) => v.lang && v.lang.toLowerCase().startsWith(base)
+        );
+        if (match) u.voice = match;
+        synth.cancel();
+        synth.speak(u);
+      };
+      // If voices aren't loaded yet (common on mobile), wait for them once.
+      if (synth.getVoices().length === 0) {
+        synth.onvoiceschanged = () => {
+          synth.onvoiceschanged = null;
+          doSpeak();
+        };
+        // Fallback in case the event never fires.
+        setTimeout(doSpeak, 250);
+      } else {
+        doSpeak();
+      }
     } catch (e) {}
   }
 
@@ -376,7 +425,15 @@ export default function CallPage() {
             </select>
           </div>
         </div>
-        <button className="cta" onClick={() => setMyLang(pickerLang)}>Join the call</button>
+        <button
+          className="cta"
+          onClick={() => {
+            unlockSpeech();
+            setMyLang(pickerLang);
+          }}
+        >
+          Join the call
+        </button>
       </div>
     );
   }
