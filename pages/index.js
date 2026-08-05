@@ -22,7 +22,6 @@ export default function Home() {
   const [joinUrl, setJoinUrl] = useState("");
   const [error, setError] = useState("");
   const [speak, setSpeak] = useState("en");
-  const [hear, setHear] = useState("es");
 
   async function startCall() {
     setError("");
@@ -37,7 +36,7 @@ export default function Home() {
       }
       // Room name is the last path segment of the Daily URL.
       const name = j.name || (j.url || "").split("/").pop();
-      router.push(`/call/${encodeURIComponent(name)}?speak=${speak}&hear=${hear}`);
+      router.push(`/call/${encodeURIComponent(name)}?speak=${speak}`);
     } catch (e) {
       setError("Network error starting the call.");
       setCreating(false);
@@ -50,7 +49,7 @@ export default function Home() {
     if (!val) return;
     // Accept either a full Daily URL or just a room name.
     const name = val.includes("/") ? val.split("/").pop().split("?")[0] : val;
-    router.push(`/call/${encodeURIComponent(name)}?speak=${speak}&hear=${hear}`);
+    router.push(`/call/${encodeURIComponent(name)}?speak=${speak}`);
   }
 
   return (
@@ -80,15 +79,9 @@ export default function Home() {
             ))}
           </select>
         </div>
-        <div className="lang-row">
-          <label>I want to hear</label>
-          <select value={hear} onChange={(e) => setHear(e.target.value)}>
-            {LANGUAGES.map((l) => (
-              <option key={l.code} value={l.code}>
-                {l.label}
-              </option>
-            ))}
-          </select>
+        <div className="lang-note">
+          The other person picks their own language. Everyone hears the other in
+          their language automatically.
         </div>
       </div>
 
