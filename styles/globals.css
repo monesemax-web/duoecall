@@ -152,25 +152,14 @@ input { font-family: inherit; }
   z-index: 2;
 }
 
-/* Computers / wide screens: show both feeds side by side, equal size. */
-@media (hover: hover) and (pointer: fine), (min-width: 900px) {
-  .main-video,
+/* All screen sizes use the FaceTime layout: guest fills the screen, your own
+   view floats in the corner, tap to swap. On wider screens the corner self-view
+   is a bit larger since there's more room. */
+@media (min-width: 900px) {
   .pip {
-    position: static;
-    width: auto;
-    height: auto;
-    border: none;
-    box-shadow: none;
-    border-radius: 14px;
-    z-index: auto;
+    width: 200px;
+    height: 150px;
   }
-  .stage {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 6px;
-    padding: 6px;
-  }
-  .pip { cursor: default; }
 }
 /* Phones/tablets held upright always keep the FaceTime overlay style. */
 @media (pointer: coarse) and (orientation: portrait) {
