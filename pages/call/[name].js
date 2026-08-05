@@ -58,6 +58,7 @@ export default function CallPage() {
   const chunksRef = useRef([]);
   const langRef = useRef({ mine: "en", theirs: null });
   const translationOnRef = useRef(true);
+  const joinedRef = useRef(false); // true once the Daily call has joined
   const [theirLang, setTheirLang] = useState(null);
 
   const domain = process.env.NEXT_PUBLIC_DAILY_DOMAIN;
@@ -141,8 +142,10 @@ export default function CallPage() {
 
     call
       .on("joined-meeting", () => {
+        joinedRef.current = true; // now safe to send messages
         setStatus("Waiting for the other person…");
         updateLocal();
+        announceMyLanguage(); // announce now that we can actually send
       })
       .on("participant-joined", () => {
         setStatus("Connected");
@@ -212,6 +215,7 @@ export default function CallPage() {
     return () => {
       clearInterval(attachInterval);
       clearInterval(langInterval);
+      joinedRef.current = false;
       try {
         call.leave();
         call.destroy();
@@ -354,7 +358,11 @@ export default function CallPage() {
   // Tell the other participant what language I speak (so they translate for me).
   function announceMyLanguage() {
     try {
-      if (callRef.current && callRef.current.sendAppMessage) {
+      if (
+        joinedRef.current &&
+        callRef.current &&
+        callRef.current.sendAppMessage
+      ) {
         callRef.current.sendAppMessage(
           { type: "lang", lang: langRef.current.mine },
           "*"
@@ -390,7 +398,7 @@ export default function CallPage() {
       const j = await r.json();
       if (j.original) setMyCaption(j.original);
       const translated = (j.translated || "").trim();
-      if (translated && callRef.current) {
+      if (translated && joinedRef.current && callRef.current) {
         // Send the translation (in THEIR language) to the other person.
         callRef.current.sendAppMessage({ type: "translation", text: translated }, "*");
       }
