@@ -38,6 +38,7 @@ export default async function handler(req, res) {
     const form = new FormData();
     form.append("file", new Blob([buffer], { type }), `clip.${ext}`);
     form.append("model", "whisper-1");
+    form.append("temperature", "0"); // reduce hallucination/invention
     if (fromLang) form.append("language", fromLang); // hint improves accuracy
 
     const sttRes = await fetch("https://api.openai.com/v1/audio/transcriptions", {
@@ -59,8 +60,18 @@ export default async function handler(req, res) {
     }
 
     const sttData = await sttRes.json();
-    const original = (sttData.text || "").trim();
-    if (!original) return res.status(200).json({ original: "", translated: "" });
+    let original = (sttData.text || "").trim();
+
+    // Whisper invents stock phrases on silence/noise. Drop the common ones.
+    const HALLUCINATIONS = [
+      "thank you", "thanks for watching", "thank you for watching",
+      "please subscribe", "subscribe", "you", "bye", "okay", "ok",
+      "so", "please", "hmm", "mm", "uh", "um", "the", "thanks",
+    ];
+    const norm = original.toLowerCase().replace(/[.!?,]/g, "").trim();
+    if (!original || HALLUCINATIONS.includes(norm) || norm.length < 2) {
+      return res.status(200).json({ original: "", translated: "" });
+    }
 
     // --- 2) Translate with a chat model ---
     const fromName = LANG_NAMES[fromLang] || fromLang || "the source language";
