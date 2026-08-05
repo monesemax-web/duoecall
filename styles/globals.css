@@ -298,3 +298,5 @@ input { font-family: inherit; }
 .turn-listening { background: #1e3a5f; color: #bfdbfe; }
 .turn-translating { background: #4a3410; color: #fde68a; }
 .turn-incoming { background: #3a1e4a; color: #e9d5ff; }
+
+.turn-locked { background: #4a1e1e; color: #fca5a5; }
