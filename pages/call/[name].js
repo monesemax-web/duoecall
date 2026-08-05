@@ -66,7 +66,11 @@ export default function CallPage() {
     if (!name || !domain || !myLang) return;
 
     const roomUrl = `https://${domain}/${name}`;
-    setShareUrl(typeof window !== "undefined" ? window.location.href : "");
+    // Share a CLEAN link (no language param) so the guest picks their own
+    // language via the picker instead of inheriting the starter's.
+    if (typeof window !== "undefined") {
+      setShareUrl(window.location.origin + window.location.pathname);
+    }
 
     // Create a call object (we render our own video UI, not Daily's prebuilt one).
     const call = DailyIframe.createCallObject({
@@ -217,11 +221,13 @@ export default function CallPage() {
   }, [name, domain, myLang]);
 
   // If they arrived with a language in the URL (started the call), use it.
+  // Wait until the router has parsed the query to avoid a wrong early decision.
   useEffect(() => {
+    if (!router.isReady) return;
     if (speak && !myLang) {
       setMyLang(speak);
     }
-  }, [speak, myLang]);
+  }, [router.isReady, speak, myLang]);
 
   // Keep language + toggle refs in sync.
   useEffect(() => {
@@ -461,6 +467,12 @@ export default function CallPage() {
         Calling isn't configured yet. Set NEXT_PUBLIC_DAILY_DOMAIN and try again.
       </div>
     );
+  }
+
+  // While the router is still parsing the URL, show a brief loading state so
+  // we don't flash the picker for someone who actually has a language param.
+  if (!router.isReady) {
+    return <div className="center-msg">Loading…</div>;
   }
 
   // If we don't yet know this person's language (they joined by link),
