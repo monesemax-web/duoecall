@@ -215,13 +215,18 @@ export default function CallPage() {
         recorder.onstop = () => {
           const blob = new Blob(chunksRef.current, { type: mime });
           chunksRef.current = [];
-          if (blob.size > 3000) handleSpeechClip(blob, mime); // ignore tiny blips
+          const realSpeech = recorder._hadRealSpeech;
+          recorder._hadRealSpeech = false;
+          // Only translate if it was flagged as genuine speech AND has enough
+          // audio data. Filters out silence, coughs, and ambient noise.
+          if (realSpeech && blob.size > 8000) handleSpeechClip(blob, mime);
         };
 
-        const SILENCE = 18;      // volume threshold (0-255-ish average)
+        const SILENCE = 32;      // volume threshold — higher = ignores ambient noise
         const SILENCE_MS = 900;  // how long a pause ends a turn
-        const MIN_SPEECH_MS = 400;
+        const MIN_SPEECH_MS = 600; // must speak at least this long to count
         let speechStart = 0;
+        let loudFrames = 0;       // count of clearly-loud frames in this turn
 
         function loop() {
           if (cancelled) return;
@@ -233,9 +238,11 @@ export default function CallPage() {
           const now = Date.now();
           if (avg > SILENCE) {
             // Speaking
+            if (avg > SILENCE + 12) loudFrames++; // count genuinely loud frames
             if (!speakingRef.current) {
               speakingRef.current = true;
               speechStart = now;
+              loudFrames = 0;
               silenceStartRef.current = null;
               if (translationOnRef.current && recorder.state === "inactive") {
                 chunksRef.current = [];
@@ -252,9 +259,13 @@ export default function CallPage() {
               if (silentFor > SILENCE_MS && spokeFor > MIN_SPEECH_MS) {
                 speakingRef.current = false;
                 silenceStartRef.current = null;
+                const hadRealSpeech = loudFrames >= 8; // enough loud frames = real speech
                 if (recorder.state === "recording") {
                   try { recorder.stop(); } catch (e) {}
                 }
+                // Tell the onstop handler whether this was real speech.
+                recorder._hadRealSpeech = hadRealSpeech;
+                loudFrames = 0;
               }
             }
           }
