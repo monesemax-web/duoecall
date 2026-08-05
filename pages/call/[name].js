@@ -43,6 +43,8 @@ export default function CallPage() {
   const [myCaption, setMyCaption] = useState("");
   const [theirCaption, setTheirCaption] = useState("");
   const [busy, setBusy] = useState(false);
+  // Turn state: 'ready' | 'listening' | 'translating' | 'incoming'
+  const [turn, setTurn] = useState("ready");
 
   // ---- Refs (live values used inside callbacks/loops) ----
   const callRef = useRef(null);
@@ -224,7 +226,11 @@ export default function CallPage() {
           const text = (d.text || "").trim();
           if (!text) return;
           setTheirCaption(text);
+          setTurn("incoming");
           speak_(text, myLangRef.current);
+          // Estimate speaking time, then return to ready.
+          const secs = Math.min(8, Math.max(2, text.split(/\s+/).length * 0.45));
+          setTimeout(() => setTurn("ready"), secs * 1000);
         }
       })
       .on("participant-left", () => {
@@ -293,9 +299,9 @@ export default function CallPage() {
 
         const SPEAK_THRESH = 30;   // avg volume to count as sound
         const LOUD_THRESH = 44;    // clearly speech
-        const SILENCE_MS = 850;    // pause that ends a turn
-        const MIN_MS = 500;        // must speak this long
-        const MIN_LOUD = 7;        // need this many loud frames
+        const SILENCE_MS = 550;    // pause that ends a turn (shortened for speed)
+        const MIN_MS = 400;        // must speak this long
+        const MIN_LOUD = 6;        // need this many loud frames
 
         function loop() {
           if (cancelled) return;
@@ -312,6 +318,7 @@ export default function CallPage() {
               speechStart = now;
               loudFrames = 0;
               chunks = [];
+              if (translationOnRef.current) setTurn("listening");
               if (translationOnRef.current && recorder.state === "inactive") {
                 try { recorder.start(); } catch (e) {}
               }
@@ -327,6 +334,10 @@ export default function CallPage() {
                 if (recorder.state === "recording") {
                   recorder._real = wasReal;
                   try { recorder.stop(); } catch (e) {}
+                }
+                // If it was real speech, we're now translating; otherwise ready.
+                if (translationOnRef.current) {
+                  setTurn(wasReal ? "translating" : "ready");
                 }
               }
             }
@@ -378,6 +389,7 @@ export default function CallPage() {
       console.error("translate error:", e);
     } finally {
       setBusy(false);
+      setTurn("ready"); // my turn is done — safe for me to talk again
     }
   }
 
@@ -455,6 +467,15 @@ export default function CallPage() {
         </div>
         <div className="status">{status}</div>
       </div>
+
+      {remoteJoined && theirLang && (
+        <div className={`turn turn-${turn}`}>
+          {turn === "listening" && <>🎙 Listening — keep talking…</>}
+          {turn === "translating" && <>⏳ Translating — please wait…</>}
+          {turn === "incoming" && <>🔊 They're speaking — please wait…</>}
+          {turn === "ready" && <>✅ Your turn — go ahead</>}
+        </div>
+      )}
 
       <div className="stage">
         <div className={swapped ? "pip" : "main-video"} onClick={swapped ? () => setSwapped(false) : undefined} role={swapped ? "button" : undefined}>
