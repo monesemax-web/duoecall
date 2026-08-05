@@ -31,6 +31,8 @@ export default function CallPage() {
   // ---- UI state ----
   const [myLang, setMyLang] = useState(null);     // language THIS person speaks
   const [pickerLang, setPickerLang] = useState("en");
+  const [myVoice, setMyVoice] = useState("male"); // this person's voice gender
+  const [pickerVoice, setPickerVoice] = useState("male");
   const [theirLang, setTheirLang] = useState(null);
   const [status, setStatus] = useState("Connecting…");
   const [micOn, setMicOn] = useState(true);
@@ -45,6 +47,9 @@ export default function CallPage() {
   const [busy, setBusy] = useState(false);
   // Turn state: 'ready' | 'listening' | 'translating' | 'incoming'
   const [turn, setTurn] = useState("ready");
+  // Floor lock: who currently holds the conversation floor: null | 'me' | 'them'
+  const [floor, setFloor] = useState(null);
+  const floorRef = useRef(null);
 
   // ---- Refs (live values used inside callbacks/loops) ----
   const callRef = useRef(null);
@@ -52,19 +57,25 @@ export default function CallPage() {
   const remoteVideoRef = useRef(null);
   const joinedRef = useRef(false);
   const myLangRef = useRef("en");
+  const myVoiceRef = useRef("male");
   const theirLangRef = useRef(null);
   const translationOnRef = useRef(true);
 
   // Keep refs in sync with state
   useEffect(() => { if (myLang) myLangRef.current = myLang; }, [myLang]);
+  useEffect(() => { myVoiceRef.current = myVoice; }, [myVoice]);
+  useEffect(() => { floorRef.current = floor; }, [floor]);
   useEffect(() => { theirLangRef.current = theirLang; }, [theirLang]);
   useEffect(() => { translationOnRef.current = translationOn; }, [translationOn]);
 
   // If the URL carries a language (starter), adopt it once router is ready
   useEffect(() => {
     if (!router.isReady) return;
-    if (speak && !myLang) setMyLang(speak);
-  }, [router.isReady, speak, myLang]);
+    if (speak && !myLang) {
+      setMyLang(speak);
+      if (router.query.voice) setMyVoice(router.query.voice);
+    }
+  }, [router.isReady, speak, myLang, router.query.voice]);
 
   // Backstop: unlock mobile speech on the first tap anywhere in the call,
   // in case the picker's Join tap didn't (e.g. the starter who skips it).
@@ -96,6 +107,21 @@ export default function CallPage() {
     safeSend({ type: "lang", lang: myLangRef.current });
   }
 
+  // ---- Floor lock: one speaker at a time ----
+  function claimFloor() {
+    if (floorRef.current) return false; // someone already holds it
+    floorRef.current = "me";
+    setFloor("me");
+    safeSend({ type: "floor", action: "claim" }); // tells them: I'm speaking
+    return true;
+  }
+  function releaseFloor() {
+    if (floorRef.current !== "me") return;
+    floorRef.current = null;
+    setFloor(null);
+    safeSend({ type: "floor", action: "release" }); // tells them: floor is open
+  }
+
   // ---- Text to speech ----
   // Mobile browsers block speech until unlocked by a user gesture. We call
   // unlockSpeech() from the Join tap so speaking works on phones afterward.
@@ -110,31 +136,54 @@ export default function CallPage() {
     } catch (e) {}
   }
 
-  function speak_(text, langCode) {
+  // Heuristics to guess a voice's gender from its name (device voices don't
+  // expose gender directly, so we match on known name patterns).
+  const FEMALE_HINTS = ["female", "woman", "samantha", "victoria", "karen", "moira", "tessa", "monica", "paulina", "google español", "google us english", "zira", "susan", "linda", "heather", "catherine", "amelie", "anna", "ella", "sofia", "lucia", "maria"];
+  const MALE_HINTS = ["male", "man", "daniel", "alex", "fred", "diego", "jorge", "google español de estados", "david", "mark", "james", "paul", "george", "thomas", "juan", "carlos", "miguel"];
+
+  function pickVoice(voices, langBase, gender) {
+    const inLang = voices.filter(
+      (v) => v.lang && v.lang.toLowerCase().startsWith(langBase)
+    );
+    if (inLang.length === 0) return null;
+    const hints = gender === "female" ? FEMALE_HINTS : MALE_HINTS;
+    // First: a voice whose name matches the desired gender.
+    const byName = inLang.find((v) =>
+      hints.some((h) => v.name.toLowerCase().includes(h))
+    );
+    if (byName) return byName;
+    // Otherwise: avoid the opposite gender if we can identify it.
+    const otherHints = gender === "female" ? MALE_HINTS : FEMALE_HINTS;
+    const notOther = inLang.find(
+      (v) => !otherHints.some((h) => v.name.toLowerCase().includes(h))
+    );
+    return notOther || inLang[0];
+  }
+
+  function speak_(text, langCode, gender) {
     try {
       if (!("speechSynthesis" in window)) return;
       const synth = window.speechSynthesis;
+      const base = (TTS_LANG[langCode] || "en").slice(0, 2);
+      const g = gender || "male";
       const doSpeak = () => {
         const u = new SpeechSynthesisUtterance(text);
         u.lang = TTS_LANG[langCode] || "en-US";
         u.rate = 1.0;
         u.volume = 1.0;
+        // Nudge pitch to reinforce the gender difference the device gives us.
+        u.pitch = g === "female" ? 1.15 : 0.85;
         const voices = synth.getVoices();
-        const base = (TTS_LANG[langCode] || "en").slice(0, 2);
-        const match = voices.find(
-          (v) => v.lang && v.lang.toLowerCase().startsWith(base)
-        );
-        if (match) u.voice = match;
+        const v = pickVoice(voices, base, g);
+        if (v) u.voice = v;
         synth.cancel();
         synth.speak(u);
       };
-      // If voices aren't loaded yet (common on mobile), wait for them once.
       if (synth.getVoices().length === 0) {
         synth.onvoiceschanged = () => {
           synth.onvoiceschanged = null;
           doSpeak();
         };
-        // Fallback in case the event never fires.
         setTimeout(doSpeak, 250);
       } else {
         doSpeak();
@@ -221,13 +270,24 @@ export default function CallPage() {
             setTheirLang(d.lang);
           }
           announceLang(); // reply so they learn mine too
+        } else if (d.type === "floor") {
+          // The other person grabbed or released the floor.
+          if (d.action === "claim") {
+            floorRef.current = "them";
+            setFloor("them");
+          } else if (d.action === "release") {
+            if (floorRef.current === "them") {
+              floorRef.current = null;
+              setFloor(null);
+            }
+          }
         } else if (d.type === "translation") {
           if (!translationOnRef.current) return;
           const text = (d.text || "").trim();
           if (!text) return;
           setTheirCaption(text);
           setTurn("incoming");
-          speak_(text, myLangRef.current);
+          speak_(text, myLangRef.current, d.voice || "male");
           // Estimate speaking time, then return to ready.
           const secs = Math.min(8, Math.max(2, text.split(/\s+/).length * 0.45));
           setTimeout(() => setTurn("ready"), secs * 1000);
@@ -236,6 +296,8 @@ export default function CallPage() {
       .on("participant-left", () => {
         setRemoteJoined(false);
         setStatus("The other person left.");
+        floorRef.current = null;
+        setFloor(null);
       })
       .on("error", (e) => {
         console.error("daily error:", e);
@@ -314,12 +376,22 @@ export default function CallPage() {
           if (avg > SPEAK_THRESH) {
             if (avg > LOUD_THRESH) loudFrames++;
             if (!speaking) {
+              // HARD LOCK: only start a turn if the floor is free (or already mine).
+              const canSpeak =
+                translationOnRef.current &&
+                (floorRef.current === null || floorRef.current === "me");
+              if (!canSpeak) {
+                // Someone else holds the floor — ignore my audio entirely.
+                raf = requestAnimationFrame(loop);
+                return;
+              }
               speaking = true;
               speechStart = now;
               loudFrames = 0;
               chunks = [];
-              if (translationOnRef.current) setTurn("listening");
-              if (translationOnRef.current && recorder.state === "inactive") {
+              claimFloor(); // grab the floor
+              setTurn("listening");
+              if (recorder.state === "inactive") {
                 try { recorder.start(); } catch (e) {}
               }
             }
@@ -339,6 +411,8 @@ export default function CallPage() {
                 if (translationOnRef.current) {
                   setTurn(wasReal ? "translating" : "ready");
                 }
+                // If it wasn't real speech, release the floor immediately.
+                if (!wasReal) releaseFloor();
               }
             }
           }
@@ -384,12 +458,27 @@ export default function CallPage() {
       const j = await resp.json();
       if (j.original) setMyCaption(j.original);
       const translated = (j.translated || "").trim();
-      if (translated) safeSend({ type: "translation", text: translated });
+      if (translated) {
+        safeSend({ type: "translation", text: translated, voice: myVoiceRef.current });
+        // Hold the floor until the other side finishes speaking my translation,
+        // then release it. Estimate speaking time from word count.
+        const words = translated.split(/\s+/).length;
+        const secs = Math.min(9, Math.max(2, words * 0.45));
+        setTimeout(() => {
+          releaseFloor();
+          setTurn("ready");
+        }, secs * 1000);
+      } else {
+        // Nothing to say — release immediately.
+        releaseFloor();
+        setTurn("ready");
+      }
     } catch (e) {
       console.error("translate error:", e);
+      releaseFloor();
+      setTurn("ready");
     } finally {
       setBusy(false);
-      setTurn("ready"); // my turn is done — safe for me to talk again
     }
   }
 
@@ -428,7 +517,7 @@ export default function CallPage() {
         <img src="/logo-mark.svg" alt="DuoEcall" style={{ width: 88, marginBottom: 12 }} />
         <div className="logo">Duo<span>Ecall</span></div>
         <div className="subtag">AI real-time translation</div>
-        <div className="tag">You've been invited to a call. Which language do you speak?</div>
+        <div className="tag">You've been invited to a call. Set your language and voice.</div>
         <div className="lang-block">
           <div className="lang-row">
             <label>I speak</label>
@@ -436,11 +525,19 @@ export default function CallPage() {
               {LANGUAGES.map((l) => <option key={l.code} value={l.code}>{l.label}</option>)}
             </select>
           </div>
+          <div className="lang-row">
+            <label>My voice</label>
+            <select value={pickerVoice} onChange={(e) => setPickerVoice(e.target.value)}>
+              <option value="male">Male</option>
+              <option value="female">Female</option>
+            </select>
+          </div>
         </div>
         <button
           className="cta"
           onClick={() => {
             unlockSpeech();
+            setMyVoice(pickerVoice);
             setMyLang(pickerLang);
           }}
         >
@@ -469,11 +566,17 @@ export default function CallPage() {
       </div>
 
       {remoteJoined && theirLang && (
-        <div className={`turn turn-${turn}`}>
-          {turn === "listening" && <>🎙 Listening — keep talking…</>}
-          {turn === "translating" && <>⏳ Translating — please wait…</>}
-          {turn === "incoming" && <>🔊 They're speaking — please wait…</>}
-          {turn === "ready" && <>✅ Your turn — go ahead</>}
+        <div className={`turn turn-${floor === "them" ? "locked" : turn}`}>
+          {floor === "them" ? (
+            <>🔒 The other person is speaking — please wait…</>
+          ) : (
+            <>
+              {turn === "listening" && <>🎙 Listening — keep talking…</>}
+              {turn === "translating" && <>⏳ Translating — please wait…</>}
+              {turn === "incoming" && <>🔊 They're speaking — please wait…</>}
+              {turn === "ready" && <>✅ Your turn — go ahead</>}
+            </>
+          )}
         </div>
       )}
 
