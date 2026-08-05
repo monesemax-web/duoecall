@@ -6,6 +6,26 @@ export default function CallPage() {
   const router = useRouter();
   const { name, speak } = router.query;
 
+  const LANGUAGES = [
+    { code: "en", label: "English" },
+    { code: "es", label: "Spanish" },
+    { code: "fr", label: "French" },
+    { code: "pt", label: "Portuguese" },
+    { code: "de", label: "German" },
+    { code: "it", label: "Italian" },
+    { code: "zh", label: "Chinese (Mandarin)" },
+    { code: "ar", label: "Arabic" },
+    { code: "hi", label: "Hindi" },
+    { code: "sw", label: "Swahili" },
+    { code: "tl", label: "Tagalog" },
+    { code: "yo", label: "Yoruba" },
+  ];
+
+  // The language THIS person speaks. Comes from the URL if they started the
+  // call; if they joined by link with no language, they pick it here first.
+  const [myLang, setMyLang] = useState(null);
+  const [pickerLang, setPickerLang] = useState("en");
+
   const LANG_LABELS = {
     en: "English", es: "Spanish", fr: "French", pt: "Portuguese",
     de: "German", it: "Italian", zh: "Chinese", ar: "Arabic",
@@ -43,7 +63,7 @@ export default function CallPage() {
   const domain = process.env.NEXT_PUBLIC_DAILY_DOMAIN;
 
   useEffect(() => {
-    if (!name || !domain) return;
+    if (!name || !domain || !myLang) return;
 
     const roomUrl = `https://${domain}/${name}`;
     setShareUrl(typeof window !== "undefined" ? window.location.href : "");
@@ -174,8 +194,19 @@ export default function CallPage() {
       updateRemote();
     }, 1500);
 
+    // Keep announcing my language until I know theirs, so a missed early
+    // message doesn't leave one side unable to translate.
+    const langInterval = setInterval(() => {
+      if (!langRef.current.theirs) {
+        announceMyLanguage();
+      } else {
+        clearInterval(langInterval);
+      }
+    }, 2000);
+
     return () => {
       clearInterval(attachInterval);
+      clearInterval(langInterval);
       try {
         call.leave();
         call.destroy();
@@ -183,14 +214,22 @@ export default function CallPage() {
       const a = document.getElementById("remote-audio");
       if (a) a.remove();
     };
-  }, [name, domain]);
+  }, [name, domain, myLang]);
+
+  // If they arrived with a language in the URL (started the call), use it.
+  useEffect(() => {
+    if (speak && !myLang) {
+      setMyLang(speak);
+    }
+  }, [speak, myLang]);
 
   // Keep language + toggle refs in sync.
   useEffect(() => {
-    langRef.current.mine = speak || "en";
-    // Announce my language to the other person whenever it's known.
-    announceMyLanguage();
-  }, [speak]);
+    if (myLang) {
+      langRef.current.mine = myLang;
+      announceMyLanguage();
+    }
+  }, [myLang]);
   useEffect(() => {
     translationOnRef.current = translationOn;
   }, [translationOn]);
@@ -199,7 +238,7 @@ export default function CallPage() {
   // silence, send the clip to be transcribed + translated, then ship the
   // translation to the other person over Daily's data channel. ---
   useEffect(() => {
-    if (!domain || !name) return;
+    if (!domain || !name || !myLang) return;
     let stream;
     let cancelled = false;
 
@@ -303,7 +342,7 @@ export default function CallPage() {
       try { audioCtxRef.current && audioCtxRef.current.close(); } catch (e) {}
       try { stream && stream.getTracks().forEach((t) => t.stop()); } catch (e) {}
     };
-  }, [name, domain]);
+  }, [name, domain, myLang]);
 
   // Tell the other participant what language I speak (so they translate for me).
   function announceMyLanguage() {
@@ -420,6 +459,45 @@ export default function CallPage() {
     return (
       <div className="center-msg">
         Calling isn't configured yet. Set NEXT_PUBLIC_DAILY_DOMAIN and try again.
+      </div>
+    );
+  }
+
+  // If we don't yet know this person's language (they joined by link),
+  // show a picker first. The call only starts once they choose.
+  if (!myLang) {
+    return (
+      <div className="home">
+        <img
+          src="/logo-mark.svg"
+          alt="DuoEcall"
+          style={{ width: 88, height: "auto", marginBottom: 12 }}
+        />
+        <div className="logo">
+          Duo<span>Ecall</span>
+        </div>
+        <div className="subtag">AI real-time translation</div>
+        <div className="tag">
+          You've been invited to a call. Which language do you speak?
+        </div>
+        <div className="lang-block">
+          <div className="lang-row">
+            <label>I speak</label>
+            <select
+              value={pickerLang}
+              onChange={(e) => setPickerLang(e.target.value)}
+            >
+              {LANGUAGES.map((l) => (
+                <option key={l.code} value={l.code}>
+                  {l.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+        <button className="cta" onClick={() => setMyLang(pickerLang)}>
+          Join the call
+        </button>
       </div>
     );
   }
