@@ -2,138 +2,145 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/router";
 import DailyIframe from "@daily-co/daily-js";
 
+const LANGUAGES = [
+  { code: "en", label: "English" },
+  { code: "es", label: "Spanish" },
+  { code: "fr", label: "French" },
+  { code: "pt", label: "Portuguese" },
+  { code: "de", label: "German" },
+  { code: "it", label: "Italian" },
+  { code: "zh", label: "Chinese (Mandarin)" },
+  { code: "ar", label: "Arabic" },
+  { code: "hi", label: "Hindi" },
+  { code: "sw", label: "Swahili" },
+  { code: "tl", label: "Tagalog" },
+  { code: "yo", label: "Yoruba" },
+];
+const LANG_LABELS = Object.fromEntries(LANGUAGES.map((l) => [l.code, l.label]));
+const TTS_LANG = {
+  en: "en-US", es: "es-ES", fr: "fr-FR", pt: "pt-BR", de: "de-DE",
+  it: "it-IT", zh: "zh-CN", ar: "ar-SA", hi: "hi-IN", sw: "sw-KE",
+  tl: "fil-PH", yo: "en-US",
+};
+
 export default function CallPage() {
   const router = useRouter();
   const { name, speak } = router.query;
+  const domain = process.env.NEXT_PUBLIC_DAILY_DOMAIN;
 
-  const LANGUAGES = [
-    { code: "en", label: "English" },
-    { code: "es", label: "Spanish" },
-    { code: "fr", label: "French" },
-    { code: "pt", label: "Portuguese" },
-    { code: "de", label: "German" },
-    { code: "it", label: "Italian" },
-    { code: "zh", label: "Chinese (Mandarin)" },
-    { code: "ar", label: "Arabic" },
-    { code: "hi", label: "Hindi" },
-    { code: "sw", label: "Swahili" },
-    { code: "tl", label: "Tagalog" },
-    { code: "yo", label: "Yoruba" },
-  ];
-
-  // The language THIS person speaks. Comes from the URL if they started the
-  // call; if they joined by link with no language, they pick it here first.
-  const [myLang, setMyLang] = useState(null);
+  // ---- UI state ----
+  const [myLang, setMyLang] = useState(null);     // language THIS person speaks
   const [pickerLang, setPickerLang] = useState("en");
-
-  const LANG_LABELS = {
-    en: "English", es: "Spanish", fr: "French", pt: "Portuguese",
-    de: "German", it: "Italian", zh: "Chinese", ar: "Arabic",
-    hi: "Hindi", sw: "Swahili", tl: "Tagalog", yo: "Yoruba",
-  };
-
-  const callRef = useRef(null);
-  const localVideoRef = useRef(null);
-  const remoteVideoRef = useRef(null);
-
+  const [theirLang, setTheirLang] = useState(null);
   const [status, setStatus] = useState("Connecting…");
   const [micOn, setMicOn] = useState(true);
   const [camOn, setCamOn] = useState(true);
   const [remoteJoined, setRemoteJoined] = useState(false);
+  const [swapped, setSwapped] = useState(false);
   const [shareUrl, setShareUrl] = useState("");
   const [copied, setCopied] = useState(false);
-  const [swapped, setSwapped] = useState(false); // false = them big, you small
-
-  // Translation state
-  const [myCaption, setMyCaption] = useState("");       // what I said (original)
-  const [theirCaption, setTheirCaption] = useState(""); // what they said, translated for me
-  const [translating, setTranslating] = useState(false);
   const [translationOn, setTranslationOn] = useState(true);
+  const [myCaption, setMyCaption] = useState("");
+  const [theirCaption, setTheirCaption] = useState("");
+  const [busy, setBusy] = useState(false);
 
-  // Refs for the speech-capture machinery
-  const recorderRef = useRef(null);
-  const audioCtxRef = useRef(null);
-  const speakingRef = useRef(false);
-  const silenceStartRef = useRef(null);
-  const chunksRef = useRef([]);
-  const langRef = useRef({ mine: "en", theirs: null });
+  // ---- Refs (live values used inside callbacks/loops) ----
+  const callRef = useRef(null);
+  const localVideoRef = useRef(null);
+  const remoteVideoRef = useRef(null);
+  const joinedRef = useRef(false);
+  const myLangRef = useRef("en");
+  const theirLangRef = useRef(null);
   const translationOnRef = useRef(true);
-  const joinedRef = useRef(false); // true once the Daily call has joined
-  const [theirLang, setTheirLang] = useState(null);
 
-  const domain = process.env.NEXT_PUBLIC_DAILY_DOMAIN;
+  // Keep refs in sync with state
+  useEffect(() => { if (myLang) myLangRef.current = myLang; }, [myLang]);
+  useEffect(() => { theirLangRef.current = theirLang; }, [theirLang]);
+  useEffect(() => { translationOnRef.current = translationOn; }, [translationOn]);
 
+  // If the URL carries a language (starter), adopt it once router is ready
+  useEffect(() => {
+    if (!router.isReady) return;
+    if (speak && !myLang) setMyLang(speak);
+  }, [router.isReady, speak, myLang]);
+
+  // ---- Send helpers (safe: only after join) ----
+  function safeSend(obj) {
+    if (!joinedRef.current) return;
+    const call = callRef.current;
+    if (!call || !call.sendAppMessage) return;
+    try { call.sendAppMessage(obj, "*"); } catch (e) {}
+  }
+  function announceLang() {
+    safeSend({ type: "lang", lang: myLangRef.current });
+  }
+
+  // ---- Text to speech ----
+  function speak_(text, langCode) {
+    try {
+      if (!("speechSynthesis" in window)) return;
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = TTS_LANG[langCode] || "en-US";
+      u.rate = 1.0;
+      const voices = window.speechSynthesis.getVoices();
+      const base = (TTS_LANG[langCode] || "en").slice(0, 2);
+      const match = voices.find((v) => v.lang && v.lang.toLowerCase().startsWith(base));
+      if (match) u.voice = match;
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.speak(u);
+    } catch (e) {}
+  }
+
+  // =====================================================================
+  //  CALL CONNECTION  (runs once we know name + domain + myLang)
+  // =====================================================================
   useEffect(() => {
     if (!name || !domain || !myLang) return;
 
     const roomUrl = `https://${domain}/${name}`;
-    // Share a CLEAN link (no language param) so the guest picks their own
-    // language via the picker instead of inheriting the starter's.
     if (typeof window !== "undefined") {
-      setShareUrl(window.location.origin + window.location.pathname);
+      setShareUrl(window.location.origin + window.location.pathname); // clean link, no lang
     }
 
-    // Create a call object (we render our own video UI, not Daily's prebuilt one).
     const call = DailyIframe.createCallObject({
       subscribeToTracksAutomatically: true,
       dailyConfig: {
         userMediaVideoConstraints: {
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-          frameRate: { ideal: 30 },
+          width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 },
         },
       },
     });
     callRef.current = call;
 
-    function attachTrack(ref, participant, kind) {
-      if (!ref.current) return;
-      const track =
-        participant.tracks &&
-        participant.tracks[kind] &&
-        participant.tracks[kind].persistentTrack;
-      if (track) {
-        // Only reset srcObject if the track actually changed — re-setting the
-        // same stream on mobile can cause the video to drop/blank.
-        const current = ref.current.srcObject;
-        const alreadyShowing =
-          current &&
-          current.getVideoTracks &&
-          current.getVideoTracks()[0] &&
-          current.getVideoTracks()[0].id === track.id;
-        if (!alreadyShowing) {
-          ref.current.srcObject = new MediaStream([track]);
-        }
-        ref.current.play && ref.current.play().catch(() => {});
-      }
+    function attach(ref, participant, kind) {
+      if (!ref.current || !participant) return;
+      const t = participant.tracks?.[kind]?.persistentTrack;
+      if (!t) return;
+      const cur = ref.current.srcObject;
+      const same = cur?.getVideoTracks?.()[0]?.id === t.id;
+      if (!same) ref.current.srcObject = new MediaStream([t]);
+      ref.current.play?.().catch(() => {});
     }
-
-    function updateLocal() {
-      const p = call.participants().local;
-      if (p) attachTrack(localVideoRef, p, "video");
-    }
-
-    function updateRemote() {
+    function refreshVideo() {
       const parts = call.participants();
+      if (parts.local) attach(localVideoRef, parts.local, "video");
       const remote = Object.values(parts).find((p) => !p.local);
       if (remote) {
         setRemoteJoined(true);
-        attachTrack(remoteVideoRef, remote, "video");
-        // Attach remote audio to a hidden element so we can hear them.
-        const aTrack =
-          remote.tracks &&
-          remote.tracks.audio &&
-          remote.tracks.audio.persistentTrack;
-        if (aTrack) {
-          let a = document.getElementById("remote-audio");
-          if (!a) {
-            a = document.createElement("audio");
-            a.id = "remote-audio";
-            a.autoplay = true;
-            document.body.appendChild(a);
+        attach(remoteVideoRef, remote, "video");
+        const a = remote.tracks?.audio?.persistentTrack;
+        if (a) {
+          let el = document.getElementById("remote-audio");
+          if (!el) {
+            el = document.createElement("audio");
+            el.id = "remote-audio";
+            el.autoplay = true;
+            document.body.appendChild(el);
           }
-          a.srcObject = new MediaStream([aTrack]);
-          a.play && a.play().catch(() => {});
+          if (el.srcObject?.getAudioTracks?.()[0]?.id !== a.id) {
+            el.srcObject = new MediaStream([a]);
+          }
+          el.play?.().catch(() => {});
         }
       } else {
         setRemoteJoined(false);
@@ -142,49 +149,38 @@ export default function CallPage() {
 
     call
       .on("joined-meeting", () => {
-        joinedRef.current = true; // now safe to send messages
+        joinedRef.current = true;
         setStatus("Waiting for the other person…");
-        updateLocal();
-        announceMyLanguage(); // announce now that we can actually send
+        refreshVideo();
+        announceLang();
       })
       .on("participant-joined", () => {
         setStatus("Connected");
-        updateRemote();
-        announceMyLanguage(); // tell the newcomer what language I speak
+        refreshVideo();
+        announceLang(); // greet the newcomer
       })
-      .on("participant-updated", () => {
-        updateLocal();
-        updateRemote();
-      })
-      .on("track-started", () => {
-        updateLocal();
-        updateRemote();
-      })
+      .on("participant-updated", refreshVideo)
+      .on("track-started", refreshVideo)
       .on("app-message", (ev) => {
-        const data = ev && ev.data;
-        if (!data) return;
-        // 1) The other person tells us what language they speak.
-        if (data.type === "lang") {
-          if (data.lang) {
-            console.log("[DuoEcall] received their language:", data.lang);
-            langRef.current.theirs = data.lang;
-            setTheirLang(data.lang);
-            announceMyLanguage();
+        const d = ev?.data;
+        if (!d) return;
+        if (d.type === "lang" && d.lang) {
+          if (theirLangRef.current !== d.lang) {
+            theirLangRef.current = d.lang;
+            setTheirLang(d.lang);
           }
-          return;
-        }
-        // 2) The other person sends us their translated text (already in MY language).
-        if (data.type === "translation") {
+          announceLang(); // reply so they learn mine too
+        } else if (d.type === "translation") {
           if (!translationOnRef.current) return;
-          const text = (data.text || "").trim();
+          const text = (d.text || "").trim();
           if (!text) return;
           setTheirCaption(text);
-          speakText(text, langRef.current.mine);
+          speak_(text, myLangRef.current);
         }
       })
       .on("participant-left", () => {
         setRemoteJoined(false);
-        setStatus("The other person left the call.");
+        setStatus("The other person left.");
       })
       .on("error", (e) => {
         console.error("daily error:", e);
@@ -196,101 +192,61 @@ export default function CallPage() {
       setStatus("Couldn't join the call.");
     });
 
-    // Safety net: some mobile browsers miss the exact attach moment, so
-    // re-check the local + remote video every 1.5s for the first while.
-    const attachInterval = setInterval(() => {
-      updateLocal();
-      updateRemote();
-    }, 1500);
-
-    // Keep announcing my language until I know theirs, so a missed early
-    // Language heartbeat: keep announcing my language on a steady interval.
-    // This never stops, guaranteeing both sides learn each other's language
-    // no matter who joined first or whether early messages were missed. It's
-    // tiny (a few bytes every 3s) so the constant traffic is negligible.
-    const langInterval = setInterval(() => {
-      announceMyLanguage();
-    }, 3000);
+    const videoPoll = setInterval(refreshVideo, 1500);
+    const langBeat = setInterval(announceLang, 3000); // steady, safe (gated on join)
 
     return () => {
-      clearInterval(attachInterval);
-      clearInterval(langInterval);
+      clearInterval(videoPoll);
+      clearInterval(langBeat);
       joinedRef.current = false;
-      try {
-        call.leave();
-        call.destroy();
-      } catch (e) {}
+      theirLangRef.current = null;
+      try { call.leave(); call.destroy(); } catch (e) {}
       const a = document.getElementById("remote-audio");
       if (a) a.remove();
     };
   }, [name, domain, myLang]);
 
-  // If they arrived with a language in the URL (started the call), use it.
-  // Wait until the router has parsed the query to avoid a wrong early decision.
+  // =====================================================================
+  //  SPEECH CAPTURE  (listen to my mic, detect end-of-turn, translate)
+  // =====================================================================
   useEffect(() => {
-    if (!router.isReady) return;
-    if (speak && !myLang) {
-      setMyLang(speak);
-    }
-  }, [router.isReady, speak, myLang]);
-
-  // Keep language + toggle refs in sync.
-  useEffect(() => {
-    if (myLang) {
-      langRef.current.mine = myLang;
-      announceMyLanguage();
-    }
-  }, [myLang]);
-  useEffect(() => {
-    translationOnRef.current = translationOn;
-  }, [translationOn]);
-
-  // --- Speech capture engine: listen to my mic, detect end-of-speech on
-  // silence, send the clip to be transcribed + translated, then ship the
-  // translation to the other person over Daily's data channel. ---
-  useEffect(() => {
-    if (!domain || !name || !myLang) return;
-    let stream;
+    if (!name || !domain || !myLang) return;
+    let stream, audioCtx, raf, recorder;
     let cancelled = false;
+    let speaking = false;
+    let speechStart = 0;
+    let silenceStart = 0;
+    let loudFrames = 0;
+    let chunks = [];
 
-    async function startListening() {
+    async function start() {
       try {
         stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         if (cancelled) return;
-
-        const AudioCtx = window.AudioContext || window.webkitAudioContext;
-        const audioCtx = new AudioCtx();
-        audioCtxRef.current = audioCtx;
-        const source = audioCtx.createMediaStreamSource(stream);
+        const AC = window.AudioContext || window.webkitAudioContext;
+        audioCtx = new AC();
+        const src = audioCtx.createMediaStreamSource(stream);
         const analyser = audioCtx.createAnalyser();
         analyser.fftSize = 512;
-        source.connect(analyser);
+        src.connect(analyser);
         const data = new Uint8Array(analyser.frequencyBinCount);
 
-        // MediaRecorder captures the actual audio; analyser just detects speech.
-        const mime = MediaRecorder.isTypeSupported("audio/webm")
-          ? "audio/webm"
-          : "audio/mp4";
-        const recorder = new MediaRecorder(stream, { mimeType: mime });
-        recorderRef.current = recorder;
-        recorder.ondataavailable = (e) => {
-          if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
-        };
+        const mime = MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "audio/mp4";
+        recorder = new MediaRecorder(stream, { mimeType: mime });
+        recorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) chunks.push(e.data); };
         recorder.onstop = () => {
-          const blob = new Blob(chunksRef.current, { type: mime });
-          chunksRef.current = [];
-          const realSpeech = recorder._hadRealSpeech;
-          recorder._hadRealSpeech = false;
-          // Only translate if it was flagged as genuine speech AND has enough
-          // audio data. Filters out silence, coughs, and ambient noise.
-          if (realSpeech && blob.size > 8000) handleSpeechClip(blob, mime);
+          const blob = new Blob(chunks, { type: mime });
+          chunks = [];
+          const real = recorder._real;
+          recorder._real = false;
+          if (real && blob.size > 8000) translateClip(blob, mime);
         };
 
-        const SILENCE = 32;      // volume threshold — higher = ignores ambient noise
-        const SILENCE_MS = 900;  // how long a pause ends a turn
-        const MIN_SPEECH_MS = 600; // must speak at least this long to count
-        let speechStart = 0;
-        let loudFrames = 0;       // count of clearly-loud frames in this turn
+        const SPEAK_THRESH = 30;   // avg volume to count as sound
+        const LOUD_THRESH = 44;    // clearly speech
+        const SILENCE_MS = 850;    // pause that ends a turn
+        const MIN_MS = 500;        // must speak this long
+        const MIN_LOUD = 7;        // need this many loud frames
 
         function loop() {
           if (cancelled) return;
@@ -298,173 +254,97 @@ export default function CallPage() {
           let sum = 0;
           for (let i = 0; i < data.length; i++) sum += data[i];
           const avg = sum / data.length;
-
           const now = Date.now();
-          if (avg > SILENCE) {
-            // Speaking
-            if (avg > SILENCE + 12) loudFrames++; // count genuinely loud frames
-            if (!speakingRef.current) {
-              speakingRef.current = true;
+
+          if (avg > SPEAK_THRESH) {
+            if (avg > LOUD_THRESH) loudFrames++;
+            if (!speaking) {
+              speaking = true;
               speechStart = now;
               loudFrames = 0;
-              silenceStartRef.current = null;
+              chunks = [];
               if (translationOnRef.current && recorder.state === "inactive") {
-                chunksRef.current = [];
                 try { recorder.start(); } catch (e) {}
               }
             }
-            silenceStartRef.current = null;
+            silenceStart = 0;
           } else {
-            // Silence
-            if (speakingRef.current) {
-              if (!silenceStartRef.current) silenceStartRef.current = now;
-              const silentFor = now - silenceStartRef.current;
-              const spokeFor = now - speechStart;
-              if (silentFor > SILENCE_MS && spokeFor > MIN_SPEECH_MS) {
-                speakingRef.current = false;
-                silenceStartRef.current = null;
-                const hadRealSpeech = loudFrames >= 8; // enough loud frames = real speech
+            if (speaking) {
+              if (!silenceStart) silenceStart = now;
+              if (now - silenceStart > SILENCE_MS && now - speechStart > MIN_MS) {
+                speaking = false;
+                const wasReal = loudFrames >= MIN_LOUD;
+                silenceStart = 0;
                 if (recorder.state === "recording") {
+                  recorder._real = wasReal;
                   try { recorder.stop(); } catch (e) {}
                 }
-                // Tell the onstop handler whether this was real speech.
-                recorder._hadRealSpeech = hadRealSpeech;
-                loudFrames = 0;
               }
             }
           }
-          requestAnimationFrame(loop);
+          raf = requestAnimationFrame(loop);
         }
         loop();
       } catch (e) {
-        console.error("mic listen error:", e);
+        console.error("mic error:", e);
       }
     }
-
-    startListening();
+    start();
 
     return () => {
       cancelled = true;
-      try {
-        if (recorderRef.current && recorderRef.current.state === "recording") {
-          recorderRef.current.stop();
-        }
-      } catch (e) {}
-      try { audioCtxRef.current && audioCtxRef.current.close(); } catch (e) {}
+      if (raf) cancelAnimationFrame(raf);
+      try { if (recorder && recorder.state === "recording") recorder.stop(); } catch (e) {}
+      try { audioCtx && audioCtx.close(); } catch (e) {}
       try { stream && stream.getTracks().forEach((t) => t.stop()); } catch (e) {}
     };
   }, [name, domain, myLang]);
 
-  // Tell the other participant what language I speak (so they translate for me).
-  function announceMyLanguage() {
-    try {
-      if (
-        joinedRef.current &&
-        callRef.current &&
-        callRef.current.sendAppMessage
-      ) {
-        callRef.current.sendAppMessage(
-          { type: "lang", lang: langRef.current.mine },
-          "*"
-        );
-      }
-    } catch (e) {}
-  }
-
-  // Send one captured speech clip to be transcribed + translated into the
-  // OTHER person's language, then deliver it to them.
-  async function handleSpeechClip(blob, mime) {
+  // Translate one captured clip into the OTHER person's language, then send it.
+  async function translateClip(blob, mime) {
     if (!translationOnRef.current) return;
-    const toLang = langRef.current.theirs;
-    // If we don't yet know the other person's language, skip (nothing to target).
-    if (!toLang) {
-      console.log("[DuoEcall] captured speech but don't know their language yet — skipping");
-      return;
-    }
-    console.log("[DuoEcall] translating my speech from", langRef.current.mine, "to", toLang);
-    setTranslating(true);
+    const toLang = theirLangRef.current;
+    if (!toLang) return; // don't know target yet
+    setBusy(true);
     try {
-      const b64 = await blobToBase64(blob);
-      const r = await fetch("/api/translate-speech", {
+      const b64 = await new Promise((res, rej) => {
+        const r = new FileReader();
+        r.onloadend = () => res(String(r.result).split(",")[1]);
+        r.onerror = rej;
+        r.readAsDataURL(blob);
+      });
+      const resp = await fetch("/api/translate-speech", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          audioBase64: b64,
-          mimeType: mime,
-          fromLang: langRef.current.mine,
-          toLang: toLang,
+          audioBase64: b64, mimeType: mime,
+          fromLang: myLangRef.current, toLang,
         }),
       });
-      const j = await r.json();
+      const j = await resp.json();
       if (j.original) setMyCaption(j.original);
       const translated = (j.translated || "").trim();
-      if (translated && joinedRef.current && callRef.current) {
-        // Send the translation (in THEIR language) to the other person.
-        callRef.current.sendAppMessage({ type: "translation", text: translated }, "*");
-      }
+      if (translated) safeSend({ type: "translation", text: translated });
     } catch (e) {
-      console.error("translate clip error:", e);
+      console.error("translate error:", e);
     } finally {
-      setTranslating(false);
+      setBusy(false);
     }
   }
 
-  function blobToBase64(blob) {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onloadend = () => resolve(String(reader.result).split(",")[1]);
-      reader.onerror = reject;
-      reader.readAsDataURL(blob);
-    });
-  }
-
-  // Speak translated text aloud in the listener's language.
-  function speakText(text, langCode) {
-    try {
-      if (!("speechSynthesis" in window)) return;
-      const u = new SpeechSynthesisUtterance(text);
-      const map = {
-        en: "en-US", es: "es-ES", fr: "fr-FR", pt: "pt-BR", de: "de-DE",
-        it: "it-IT", zh: "zh-CN", ar: "ar-SA", hi: "hi-IN", sw: "sw-KE",
-        tl: "fil-PH", yo: "en-US",
-      };
-      u.lang = map[langCode] || "en-US";
-      u.rate = 1.0;
-      // Pick a matching voice if available.
-      const voices = window.speechSynthesis.getVoices();
-      const match = voices.find((v) => v.lang && v.lang.startsWith((map[langCode] || "en").slice(0, 2)));
-      if (match) u.voice = match;
-      window.speechSynthesis.cancel(); // stop any prior utterance
-      window.speechSynthesis.speak(u);
-    } catch (e) {
-      console.error("tts error:", e);
-    }
-  }
-
+  // ---- Controls ----
   function toggleMic() {
-    const call = callRef.current;
-    if (!call) return;
-    const next = !micOn;
-    call.setLocalAudio(next);
-    setMicOn(next);
+    const c = callRef.current; if (!c) return;
+    const n = !micOn; c.setLocalAudio(n); setMicOn(n);
   }
-
   function toggleCam() {
-    const call = callRef.current;
-    if (!call) return;
-    const next = !camOn;
-    call.setLocalVideo(next);
-    setCamOn(next);
+    const c = callRef.current; if (!c) return;
+    const n = !camOn; c.setLocalVideo(n); setCamOn(n);
   }
-
   function endCall() {
-    const call = callRef.current;
-    try {
-      call && call.leave();
-    } catch (e) {}
+    try { callRef.current && callRef.current.leave(); } catch (e) {}
     router.push("/");
   }
-
   function copyLink() {
     if (!shareUrl) return;
     try {
@@ -474,55 +354,29 @@ export default function CallPage() {
     } catch (e) {}
   }
 
+  // ---- Render guards ----
   if (!domain) {
-    return (
-      <div className="center-msg">
-        Calling isn't configured yet. Set NEXT_PUBLIC_DAILY_DOMAIN and try again.
-      </div>
-    );
+    return <div className="center-msg">Calling isn't configured. Set NEXT_PUBLIC_DAILY_DOMAIN.</div>;
   }
-
-  // While the router is still parsing the URL, show a brief loading state so
-  // we don't flash the picker for someone who actually has a language param.
   if (!router.isReady) {
     return <div className="center-msg">Loading…</div>;
   }
-
-  // If we don't yet know this person's language (they joined by link),
-  // show a picker first. The call only starts once they choose.
   if (!myLang) {
     return (
       <div className="home">
-        <img
-          src="/logo-mark.svg"
-          alt="DuoEcall"
-          style={{ width: 88, height: "auto", marginBottom: 12 }}
-        />
-        <div className="logo">
-          Duo<span>Ecall</span>
-        </div>
+        <img src="/logo-mark.svg" alt="DuoEcall" style={{ width: 88, marginBottom: 12 }} />
+        <div className="logo">Duo<span>Ecall</span></div>
         <div className="subtag">AI real-time translation</div>
-        <div className="tag">
-          You've been invited to a call. Which language do you speak?
-        </div>
+        <div className="tag">You've been invited to a call. Which language do you speak?</div>
         <div className="lang-block">
           <div className="lang-row">
             <label>I speak</label>
-            <select
-              value={pickerLang}
-              onChange={(e) => setPickerLang(e.target.value)}
-            >
-              {LANGUAGES.map((l) => (
-                <option key={l.code} value={l.code}>
-                  {l.label}
-                </option>
-              ))}
+            <select value={pickerLang} onChange={(e) => setPickerLang(e.target.value)}>
+              {LANGUAGES.map((l) => <option key={l.code} value={l.code}>{l.label}</option>)}
             </select>
           </div>
         </div>
-        <button className="cta" onClick={() => setMyLang(pickerLang)}>
-          Join the call
-        </button>
+        <button className="cta" onClick={() => setMyLang(pickerLang)}>Join the call</button>
       </div>
     );
   }
@@ -531,22 +385,14 @@ export default function CallPage() {
     <div className="call">
       <div className="callbar">
         <div className="who">
-          <img
-            src="/logo-mark.svg"
-            alt=""
-            style={{ height: 26, width: "auto", verticalAlign: "middle", marginRight: 8 }}
-          />
+          <img src="/logo-mark.svg" alt="" style={{ height: 26, marginRight: 8, verticalAlign: "middle" }} />
           <div>
-            <div>
-              Duo<span>Ecall</span>
-            </div>
+            <div>Duo<span>Ecall</span></div>
             <div className="langs">
-              <b>{LANG_LABELS[speak] || speak || "…"}</b>
-              {theirLang ? (
-                <> ↔ <b>{LANG_LABELS[theirLang] || theirLang}</b></>
-              ) : (
-                <span style={{ opacity: 0.6 }}> · waiting for other language…</span>
-              )}
+              <b>{LANG_LABELS[myLang] || myLang}</b>
+              {theirLang
+                ? <> ↔ <b>{LANG_LABELS[theirLang] || theirLang}</b></>
+                : <span style={{ opacity: 0.6 }}> · waiting…</span>}
             </div>
           </div>
         </div>
@@ -554,54 +400,23 @@ export default function CallPage() {
       </div>
 
       <div className="stage">
-        {/* Remote video element (fixed ref). Sizing swaps via class. */}
-        <div
-          className={swapped ? "pip" : "main-video"}
-          onClick={swapped ? () => setSwapped(false) : undefined}
-          role={swapped ? "button" : undefined}
-        >
+        <div className={swapped ? "pip" : "main-video"} onClick={swapped ? () => setSwapped(false) : undefined} role={swapped ? "button" : undefined}>
           <video ref={remoteVideoRef} autoPlay playsInline />
           {!remoteJoined && !swapped && (
-            <div className="placeholder">
-              Waiting for the other person to join…
-              <br />
-              Share the link below.
-            </div>
+            <div className="placeholder">Waiting for the other person…<br />Share the link below.</div>
           )}
-          {swapped ? (
-            <span className="pip-label">Them</span>
-          ) : (
-            remoteJoined && <div className="main-label">Them</div>
-          )}
+          {swapped ? <span className="pip-label">Them</span> : (remoteJoined && <div className="main-label">Them</div>)}
         </div>
-
-        {/* Local (self) video element (fixed ref). Sizing swaps via class. */}
-        <div
-          className={swapped ? "main-video" : "pip"}
-          onClick={!swapped ? () => setSwapped(true) : undefined}
-          role={!swapped ? "button" : undefined}
-        >
+        <div className={swapped ? "main-video" : "pip"} onClick={!swapped ? () => setSwapped(true) : undefined} role={!swapped ? "button" : undefined}>
           <video ref={localVideoRef} autoPlay playsInline muted />
-          {swapped ? (
-            <div className="main-label">You</div>
-          ) : (
-            <span className="pip-label">You</span>
-          )}
+          {swapped ? <div className="main-label">You</div> : <span className="pip-label">You</span>}
         </div>
       </div>
 
-      {/* Live caption bar: what THEY said (translated for me) on top,
-          what I said (my own words) below, so I can see it's working. */}
-      {(theirCaption || myCaption || translating) && (
+      {(theirCaption || myCaption || busy) && (
         <div className="captions">
-          {theirCaption && (
-            <div className="cap-them">{theirCaption}</div>
-          )}
-          {(myCaption || translating) && (
-            <div className="cap-me">
-              {translating && !myCaption ? "…" : myCaption}
-            </div>
-          )}
+          {theirCaption && <div className="cap-them">{theirCaption}</div>}
+          {(myCaption || busy) && <div className="cap-me">{busy && !myCaption ? "…" : myCaption}</div>}
         </div>
       )}
 
@@ -613,33 +428,16 @@ export default function CallPage() {
       )}
 
       <div className="controls">
-        <button
-          className={`ctrl ${micOn ? "" : "off"}`}
-          onClick={toggleMic}
-          aria-label={micOn ? "Mute" : "Unmute"}
-          title={micOn ? "Mute" : "Unmute"}
-        >
+        <button className={`ctrl ${micOn ? "" : "off"}`} onClick={toggleMic} title={micOn ? "Mute" : "Unmute"}>
           {micOn ? "🎙" : "🔇"}
         </button>
-        <button
-          className={`ctrl ${camOn ? "" : "off"}`}
-          onClick={toggleCam}
-          aria-label={camOn ? "Turn camera off" : "Turn camera on"}
-          title={camOn ? "Camera off" : "Camera on"}
-        >
+        <button className={`ctrl ${camOn ? "" : "off"}`} onClick={toggleCam} title={camOn ? "Camera off" : "Camera on"}>
           {camOn ? "📷" : "🚫"}
         </button>
-        <button
-          className={`ctrl ${translationOn ? "on-accent" : "off"}`}
-          onClick={() => setTranslationOn((v) => !v)}
-          aria-label={translationOn ? "Turn translation off" : "Turn translation on"}
-          title={translationOn ? "Translation on" : "Translation off"}
-        >
+        <button className={`ctrl ${translationOn ? "on-accent" : "off"}`} onClick={() => setTranslationOn((v) => !v)} title="Translation">
           🌐
         </button>
-        <button className="ctrl end" onClick={endCall} aria-label="End call" title="End call">
-          ✕
-        </button>
+        <button className="ctrl end" onClick={endCall} title="End call">✕</button>
       </div>
     </div>
   );
