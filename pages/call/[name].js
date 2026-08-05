@@ -4,7 +4,7 @@ import DailyIframe from "@daily-co/daily-js";
 
 export default function CallPage() {
   const router = useRouter();
-  const { name, speak, hear } = router.query;
+  const { name, speak } = router.query;
 
   const LANG_LABELS = {
     en: "English", es: "Spanish", fr: "French", pt: "Portuguese",
@@ -36,8 +36,9 @@ export default function CallPage() {
   const speakingRef = useRef(false);
   const silenceStartRef = useRef(null);
   const chunksRef = useRef([]);
-  const langRef = useRef({ speak: "en", hear: "es" });
+  const langRef = useRef({ mine: "en", theirs: null });
   const translationOnRef = useRef(true);
+  const [theirLang, setTheirLang] = useState(null);
 
   const domain = process.env.NEXT_PUBLIC_DAILY_DOMAIN;
 
@@ -122,6 +123,7 @@ export default function CallPage() {
       .on("participant-joined", () => {
         setStatus("Connected");
         updateRemote();
+        announceMyLanguage(); // tell the newcomer what language I speak
       })
       .on("participant-updated", () => {
         updateLocal();
@@ -132,14 +134,24 @@ export default function CallPage() {
         updateRemote();
       })
       .on("app-message", (ev) => {
-        // The other side sends us their translated text; we caption + speak it.
         const data = ev && ev.data;
-        if (!data || data.type !== "translation") return;
-        if (!translationOnRef.current) return;
-        const text = (data.text || "").trim();
-        if (!text) return;
-        setTheirCaption(text);
-        speakText(text, langRef.current.hear);
+        if (!data) return;
+        // 1) The other person tells us what language they speak.
+        if (data.type === "lang") {
+          if (data.lang) {
+            langRef.current.theirs = data.lang;
+            setTheirLang(data.lang);
+          }
+          return;
+        }
+        // 2) The other person sends us their translated text (already in MY language).
+        if (data.type === "translation") {
+          if (!translationOnRef.current) return;
+          const text = (data.text || "").trim();
+          if (!text) return;
+          setTheirCaption(text);
+          speakText(text, langRef.current.mine);
+        }
       })
       .on("participant-left", () => {
         setRemoteJoined(false);
@@ -173,10 +185,12 @@ export default function CallPage() {
     };
   }, [name, domain]);
 
-  // Keep language + toggle refs in sync with query params / state.
+  // Keep language + toggle refs in sync.
   useEffect(() => {
-    langRef.current = { speak: speak || "en", hear: hear || "es" };
-  }, [speak, hear]);
+    langRef.current.mine = speak || "en";
+    // Announce my language to the other person whenever it's known.
+    announceMyLanguage();
+  }, [speak]);
   useEffect(() => {
     translationOnRef.current = translationOn;
   }, [translationOn]);
@@ -291,10 +305,25 @@ export default function CallPage() {
     };
   }, [name, domain]);
 
-  // Send one captured speech clip to be transcribed + translated, then
-  // deliver the translation to the other participant.
+  // Tell the other participant what language I speak (so they translate for me).
+  function announceMyLanguage() {
+    try {
+      if (callRef.current && callRef.current.sendAppMessage) {
+        callRef.current.sendAppMessage(
+          { type: "lang", lang: langRef.current.mine },
+          "*"
+        );
+      }
+    } catch (e) {}
+  }
+
+  // Send one captured speech clip to be transcribed + translated into the
+  // OTHER person's language, then deliver it to them.
   async function handleSpeechClip(blob, mime) {
     if (!translationOnRef.current) return;
+    const toLang = langRef.current.theirs;
+    // If we don't yet know the other person's language, skip (nothing to target).
+    if (!toLang) return;
     setTranslating(true);
     try {
       const b64 = await blobToBase64(blob);
@@ -304,15 +333,15 @@ export default function CallPage() {
         body: JSON.stringify({
           audioBase64: b64,
           mimeType: mime,
-          fromLang: langRef.current.speak,
-          toLang: langRef.current.hear,
+          fromLang: langRef.current.mine,
+          toLang: toLang,
         }),
       });
       const j = await r.json();
       if (j.original) setMyCaption(j.original);
       const translated = (j.translated || "").trim();
       if (translated && callRef.current) {
-        // Send the translation to the other person to caption + speak.
+        // Send the translation (in THEIR language) to the other person.
         callRef.current.sendAppMessage({ type: "translation", text: translated }, "*");
       }
     } catch (e) {
@@ -408,11 +437,14 @@ export default function CallPage() {
             <div>
               Duo<span>Ecall</span>
             </div>
-            {speak && hear && (
-              <div className="langs">
-                <b>{LANG_LABELS[speak] || speak}</b> → <b>{LANG_LABELS[hear] || hear}</b>
-              </div>
-            )}
+            <div className="langs">
+              <b>{LANG_LABELS[speak] || speak || "…"}</b>
+              {theirLang ? (
+                <> ↔ <b>{LANG_LABELS[theirLang] || theirLang}</b></>
+              ) : (
+                <span style={{ opacity: 0.6 }}> · waiting for other language…</span>
+              )}
+            </div>
           </div>
         </div>
         <div className="status">{status}</div>
