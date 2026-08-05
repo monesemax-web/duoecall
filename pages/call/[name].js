@@ -34,6 +34,13 @@ export default function CallPage() {
     // Create a call object (we render our own video UI, not Daily's prebuilt one).
     const call = DailyIframe.createCallObject({
       subscribeToTracksAutomatically: true,
+      dailyConfig: {
+        userMediaVideoConstraints: {
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          frameRate: { ideal: 30 },
+        },
+      },
     });
     callRef.current = call;
 
