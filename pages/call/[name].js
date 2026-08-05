@@ -22,6 +22,7 @@ export default function CallPage() {
   const [remoteJoined, setRemoteJoined] = useState(false);
   const [shareUrl, setShareUrl] = useState("");
   const [copied, setCopied] = useState(false);
+  const [swapped, setSwapped] = useState(false); // false = them big, you small
 
   const domain = process.env.NEXT_PUBLIC_DAILY_DOMAIN;
 
@@ -51,8 +52,17 @@ export default function CallPage() {
         participant.tracks[kind] &&
         participant.tracks[kind].persistentTrack;
       if (track) {
-        const stream = new MediaStream([track]);
-        ref.current.srcObject = stream;
+        // Only reset srcObject if the track actually changed — re-setting the
+        // same stream on mobile can cause the video to drop/blank.
+        const current = ref.current.srcObject;
+        const alreadyShowing =
+          current &&
+          current.getVideoTracks &&
+          current.getVideoTracks()[0] &&
+          current.getVideoTracks()[0].id === track.id;
+        if (!alreadyShowing) {
+          ref.current.srcObject = new MediaStream([track]);
+        }
         ref.current.play && ref.current.play().catch(() => {});
       }
     }
@@ -102,6 +112,10 @@ export default function CallPage() {
         updateLocal();
         updateRemote();
       })
+      .on("track-started", () => {
+        updateLocal();
+        updateRemote();
+      })
       .on("participant-left", () => {
         setRemoteJoined(false);
         setStatus("The other person left the call.");
@@ -116,7 +130,15 @@ export default function CallPage() {
       setStatus("Couldn't join the call.");
     });
 
+    // Safety net: some mobile browsers miss the exact attach moment, so
+    // re-check the local + remote video every 1.5s for the first while.
+    const attachInterval = setInterval(() => {
+      updateLocal();
+      updateRemote();
+    }, 1500);
+
     return () => {
+      clearInterval(attachInterval);
       try {
         call.leave();
         call.destroy();
@@ -191,20 +213,39 @@ export default function CallPage() {
       </div>
 
       <div className="stage">
-        <div className="tile">
+        {/* Remote video element (fixed ref). Sizing swaps via class. */}
+        <div
+          className={swapped ? "pip" : "main-video"}
+          onClick={swapped ? () => setSwapped(false) : undefined}
+          role={swapped ? "button" : undefined}
+        >
           <video ref={remoteVideoRef} autoPlay playsInline />
-          {!remoteJoined && (
+          {!remoteJoined && !swapped && (
             <div className="placeholder">
               Waiting for the other person to join…
               <br />
               Share the link below.
             </div>
           )}
-          {remoteJoined && <div className="label">Them</div>}
+          {swapped ? (
+            <span className="pip-label">Them</span>
+          ) : (
+            remoteJoined && <div className="main-label">Them</div>
+          )}
         </div>
-        <div className="tile">
+
+        {/* Local (self) video element (fixed ref). Sizing swaps via class. */}
+        <div
+          className={swapped ? "main-video" : "pip"}
+          onClick={!swapped ? () => setSwapped(true) : undefined}
+          role={!swapped ? "button" : undefined}
+        >
           <video ref={localVideoRef} autoPlay playsInline muted />
-          <div className="label">You</div>
+          {swapped ? (
+            <div className="main-label">You</div>
+          ) : (
+            <span className="pip-label">You</span>
+          )}
         </div>
       </div>
 
