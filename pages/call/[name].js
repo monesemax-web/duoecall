@@ -163,8 +163,10 @@ export default function CallPage() {
         // 1) The other person tells us what language they speak.
         if (data.type === "lang") {
           if (data.lang) {
+            console.log("[DuoEcall] received their language:", data.lang);
             langRef.current.theirs = data.lang;
             setTheirLang(data.lang);
+            announceMyLanguage();
           }
           return;
         }
@@ -199,14 +201,13 @@ export default function CallPage() {
     }, 1500);
 
     // Keep announcing my language until I know theirs, so a missed early
-    // message doesn't leave one side unable to translate.
+    // Language heartbeat: keep announcing my language on a steady interval.
+    // This never stops, guaranteeing both sides learn each other's language
+    // no matter who joined first or whether early messages were missed. It's
+    // tiny (a few bytes every 3s) so the constant traffic is negligible.
     const langInterval = setInterval(() => {
-      if (!langRef.current.theirs) {
-        announceMyLanguage();
-      } else {
-        clearInterval(langInterval);
-      }
-    }, 2000);
+      announceMyLanguage();
+    }, 3000);
 
     return () => {
       clearInterval(attachInterval);
@@ -368,7 +369,11 @@ export default function CallPage() {
     if (!translationOnRef.current) return;
     const toLang = langRef.current.theirs;
     // If we don't yet know the other person's language, skip (nothing to target).
-    if (!toLang) return;
+    if (!toLang) {
+      console.log("[DuoEcall] captured speech but don't know their language yet — skipping");
+      return;
+    }
+    console.log("[DuoEcall] translating my speech from", langRef.current.mine, "to", toLang);
     setTranslating(true);
     try {
       const b64 = await blobToBase64(blob);
