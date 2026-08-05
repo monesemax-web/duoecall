@@ -275,3 +275,12 @@ input { font-family: inherit; }
   border-color: var(--accent-strong);
   color: #04211d;
 }
+
+.lang-note {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: center;
+  margin-top: 4px;
+  padding: 0 8px;
+}
